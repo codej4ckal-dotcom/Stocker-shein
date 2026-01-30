@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: shein-monitor
+    env: python
+    buildCommand: ""
+    startCommand: python shein_monitor.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    healthCheckPath: /health
+    autoDeploy: true
