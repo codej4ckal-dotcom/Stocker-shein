@@ -2,7 +2,7 @@ import time
 import logging
 import json
 import random
-import os
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -28,18 +28,14 @@ class SHEINMonitor:
         self.alert_threshold = 30
         self.last_count = 0
         self.last_success_time = None
-        self.state_file = "monitor_state.json"
-        
-        # Load previous state
-        self.load_state()
         
         # Proxy settings
         self.proxies = []
         self.proxy_source_url = "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt"
         self.proxy_check_timeout = 10
         
-        # The target URL
-        self.target_url = "https://www.sheinindia.in/c/sverse-5939-37961"
+        # The target URL - with filter fragment
+        self.target_url = "https://www.sheinindia.in/c/sverse-5939-37961#filterBy"
         
         # Real browser headers collected from actual browser
         self.headers_list = [
@@ -56,6 +52,7 @@ class SHEINMonitor:
                 'Sec-Fetch-Site': 'none',
                 'Sec-Fetch-User': '?1',
                 'Cache-Control': 'max-age=0',
+                'Referer': 'https://www.sheinindia.in/',
             },
             {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
@@ -69,6 +66,7 @@ class SHEINMonitor:
                 'Sec-Fetch-Mode': 'navigate',
                 'Sec-Fetch-Site': 'none',
                 'Sec-Fetch-User': '?1',
+                'Referer': 'https://www.sheinindia.in/',
             }
         ]
         
@@ -77,29 +75,8 @@ class SHEINMonitor:
         logger.info(f"Target: {self.target_url}")
         logger.info(f"Threshold: {self.alert_threshold}")
         logger.info(f"Check Interval: {self.check_interval}s")
-        logger.info(f"Check Interval: {self.check_interval}s")
-        logger.info(f"Check Interval: {self.check_interval}s")
         logger.info("=" * 60)
         
-    def load_state(self):
-        """Load the last known count from file"""
-        try:
-            if os.path.exists(self.state_file):
-                with open(self.state_file, 'r') as f:
-                    data = json.load(f)
-                    self.last_count = data.get('last_count', 0)
-                    logger.info(f"Loaded previous state: Count = {self.last_count}")
-        except Exception as e:
-            logger.error(f"Failed to load state: {e}")
-
-    def save_state(self):
-        """Save current count to file"""
-        try:
-            with open(self.state_file, 'w') as f:
-                json.dump({'last_count': self.last_count, 'timestamp': time.time()}, f)
-        except Exception as e:
-            logger.error(f"Failed to save state: {e}")
-            
     def fetch_proxies(self):
         """Fetch free proxies from GitHub"""
         try:
@@ -120,54 +97,71 @@ class SHEINMonitor:
     def extract_men_count_from_html(self, html: str) -> Optional[int]:
         """
         Extract the men's count from HTML
-        Looking for pattern: "Men (26)"
+        Based on the screenshot: "Men (32)"
         """
-        import re
-        
-        # Method 1: Direct regex for "Men (26)"
-        pattern = r'Men\s*\(\s*(\d+)\s*\)'
-        matches = re.findall(pattern, html, re.IGNORECASE)
-        
-        for match in matches:
-            if match.isdigit():
-                count = int(match)
-                logger.debug(f"Found count via regex 'Men (X)': {count}")
-                return count
-        
-        # Method 2: Look for filter data
-        # SHEIN often stores filter counts in JSON
-        json_patterns = [
-            r'"filterCount"\s*:\s*\{[^}]*"men"[^}]*:\s*(\d+)',
-            r'"count"\s*:\s*(\d+)[^}]*"name"\s*:\s*"men"',
-            r'"Men"\s*:\s*(\d+)',
-        ]
-        
-        for pattern in json_patterns:
-            matches = re.findall(pattern, html, re.IGNORECASE)
-            for match in matches:
-                if match.isdigit():
-                    count = int(match)
-                    logger.debug(f"Found count via JSON pattern: {count}")
-                    return count
-        
-        # Method 3: Look for product count in page
-        product_patterns = [
-            r'"productCount"\s*:\s*(\d+)',
-            r'"totalCount"\s*:\s*(\d+)',
-            r'(\d+)\s+Products?',
-            r'Showing\s+(\d+)\s+of',
-            r'"numberOfItems"\s*:\s*"(\d+)"',  # Matches "numberOfItems": "295"
-        ]
-        
-        for pattern in product_patterns:
+        try:
+            # Method 1: Direct regex for "Men (32)" - exactly as shown in screenshot
+            # This pattern matches "Men" followed by space, then parentheses with number
+            pattern = r'Men\s*\(\s*(\d+)\s*\)'
             matches = re.findall(pattern, html)
-            for match in matches:
-                if match.isdigit():
-                    count = int(match)
-                    logger.debug(f"Found count via product pattern: {count}")
-                    return count
-        
-        return None
+            
+            if matches:
+                count = int(matches[0])
+                logger.info(f"Found men's count via direct pattern: {count}")
+                return count
+            
+            # Method 2: Case-insensitive search for "Men ("
+            pattern = r'Men\s*\(\s*(\d+)\s*\)'
+            matches = re.findall(pattern, html, re.IGNORECASE)
+            
+            if matches:
+                count = int(matches[0])
+                logger.info(f"Found men's count via case-insensitive pattern: {count}")
+                return count
+            
+            # Method 3: Look for filter section that contains "Gender" and "Men"
+            # Find the Gender section first
+            gender_pattern = r'Gender[^>]*>.*?Men\s*\(\s*(\d+)\s*\)'
+            matches = re.findall(gender_pattern, html, re.IGNORECASE | re.DOTALL)
+            
+            if matches:
+                count = int(matches[0])
+                logger.info(f"Found men's count in Gender section: {count}")
+                return count
+            
+            # Method 4: Look for list items with "Men ("
+            li_pattern = r'<[^>]*>.*?Men\s*\(\s*(\d+)\s*\).*?<'
+            matches = re.findall(li_pattern, html, re.IGNORECASE)
+            
+            if matches:
+                count = int(matches[0])
+                logger.info(f"Found men's count in list item: {count}")
+                return count
+            
+            # Method 5: Look for the filter count in the filter panel
+            # Try to find the filter section by looking for "Filters" text
+            filters_pattern = r'Filters[^<]*<[^>]*>.*?Men\s*\(\s*(\d+)\s*\)'
+            matches = re.findall(filters_pattern, html, re.IGNORECASE | re.DOTALL)
+            
+            if matches:
+                count = int(matches[0])
+                logger.info(f"Found men's count in Filters section: {count}")
+                return count
+            
+            # Debug: Print a snippet of HTML where "Men" appears
+            men_index = html.lower().find('men')
+            if men_index != -1:
+                start = max(0, men_index - 100)
+                end = min(len(html), men_index + 200)
+                snippet = html[start:end]
+                logger.debug(f"HTML snippet around 'Men': {snippet}")
+            
+            logger.warning("Could not extract men's product count")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error extracting count: {e}")
+            return None
     
     def make_request(self):
         """Make HTTP request with rotation and proxies"""
@@ -181,11 +175,14 @@ class SHEINMonitor:
             # Fallback to direct connection if no proxies
             try:
                 headers = random.choice(self.headers_list)
-                url = f"{self.target_url}?_={int(time.time() * 1000)}"
+                # Add timestamp to avoid caching
+                url = f"{self.target_url.split('#')[0]}?_={int(time.time() * 1000)}"
                 response = requests.get(url, headers=headers, timeout=15)
                 if response.status_code == 200:
                    logger.info(f"Successfully fetched page (Direct) (Status: {response.status_code})")
                    return response.text
+                else:
+                    logger.warning(f"Direct connection failed with status: {response.status_code}")
             except Exception as e:
                 logger.error(f"Direct connection failed: {e}")
             return None
@@ -195,7 +192,8 @@ class SHEINMonitor:
         
         for i in range(max_attempts):
             headers = random.choice(self.headers_list)
-            url = f"{self.target_url}?_={int(time.time() * 1000)}"
+            # Add timestamp to avoid caching
+            url = f"{self.target_url.split('#')[0]}?_={int(time.time() * 1000)}"
             
             # Pick a random proxy
             proxy_ip = random.choice(self.proxies)
@@ -228,16 +226,16 @@ class SHEINMonitor:
             current_time = datetime.now().strftime("%H:%M:%S")
             
             message = f"""
-SHEINVERSE STOCK ALERT
+**SHEINVERSE STOCK ALERT**
 
-Men's product count has increased!
+Men's product count has changed!
 
-New Count: {count}
-Previous Count: {self.last_count}
-Threshold: {self.alert_threshold}
-Time: {current_time}
+- New Count: {count}  
+- Previous Count: {self.last_count}  
+- Threshold: {self.alert_threshold}  
+- Time: {current_time}  
 
-This is an automated alert from your SHEIN Monitor
+This is an automated alert from your **SHEIN Monitor**
 """
             
             self.bot.send_message(
@@ -289,21 +287,20 @@ This is an automated alert from your SHEIN Monitor
         logger.info(f"Alert Threshold: {self.alert_threshold}")
         
         # Step 4: Check if we need to send alert
-        # Only alert if we have a previous count (not 0) or if we successfully loaded state
-        if self.last_count > 0 and current_count > self.alert_threshold and current_count > self.last_count:
-            logger.info("ALERT TRIGGERED: Count increased above threshold!")
+        # Send alert if:
+        # 1. Count is above threshold AND
+        # 2. Count has changed from previous count
+        if current_count > self.alert_threshold and current_count != self.last_count:
+            logger.info(f"ALERT TRIGGERED: Count changed from {self.last_count} to {current_count}!")
             self.send_telegram_alert(current_count)
-        elif self.last_count == 0:
-             logger.info(f"First run (or reset): Initializing count to {current_count} without alert")
         elif current_count > self.alert_threshold:
-            logger.info("Count is above threshold but hasn't increased")
+            logger.info("Count is above threshold but hasn't changed")
         else:
             logger.info("Count is below threshold")
         
         # Step 5: Update last count
         self.last_count = current_count
         self.last_success_time = datetime.now()
-        self.save_state()
         
         # Step 6: Log to file
         try:
