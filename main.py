@@ -2,6 +2,7 @@ import time
 import logging
 import json
 import random
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -27,6 +28,10 @@ class SHEINMonitor:
         self.alert_threshold = 30
         self.last_count = 0
         self.last_success_time = None
+        self.state_file = "monitor_state.json"
+        
+        # Load previous state
+        self.load_state()
         
         # Proxy settings
         self.proxies = []
@@ -73,8 +78,28 @@ class SHEINMonitor:
         logger.info(f"Threshold: {self.alert_threshold}")
         logger.info(f"Check Interval: {self.check_interval}s")
         logger.info(f"Check Interval: {self.check_interval}s")
+        logger.info(f"Check Interval: {self.check_interval}s")
         logger.info("=" * 60)
         
+    def load_state(self):
+        """Load the last known count from file"""
+        try:
+            if os.path.exists(self.state_file):
+                with open(self.state_file, 'r') as f:
+                    data = json.load(f)
+                    self.last_count = data.get('last_count', 0)
+                    logger.info(f"Loaded previous state: Count = {self.last_count}")
+        except Exception as e:
+            logger.error(f"Failed to load state: {e}")
+
+    def save_state(self):
+        """Save current count to file"""
+        try:
+            with open(self.state_file, 'w') as f:
+                json.dump({'last_count': self.last_count, 'timestamp': time.time()}, f)
+        except Exception as e:
+            logger.error(f"Failed to save state: {e}")
+            
     def fetch_proxies(self):
         """Fetch free proxies from GitHub"""
         try:
@@ -264,9 +289,12 @@ This is an automated alert from your SHEIN Monitor
         logger.info(f"Alert Threshold: {self.alert_threshold}")
         
         # Step 4: Check if we need to send alert
-        if current_count > self.alert_threshold and current_count > self.last_count:
+        # Only alert if we have a previous count (not 0) or if we successfully loaded state
+        if self.last_count > 0 and current_count > self.alert_threshold and current_count > self.last_count:
             logger.info("ALERT TRIGGERED: Count increased above threshold!")
             self.send_telegram_alert(current_count)
+        elif self.last_count == 0:
+             logger.info(f"First run (or reset): Initializing count to {current_count} without alert")
         elif current_count > self.alert_threshold:
             logger.info("Count is above threshold but hasn't increased")
         else:
@@ -275,6 +303,7 @@ This is an automated alert from your SHEIN Monitor
         # Step 5: Update last count
         self.last_count = current_count
         self.last_success_time = datetime.now()
+        self.save_state()
         
         # Step 6: Log to file
         try:
