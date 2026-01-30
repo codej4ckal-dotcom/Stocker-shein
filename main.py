@@ -1,231 +1,308 @@
 import time
+import re
 import logging
+import random
 from datetime import datetime
+from typing import Optional
 
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
+import requests
+import cloudscraper
+from bs4 import BeautifulSoup
+from fake_useragent import UserAgent
 from telegram import Bot
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
 class SHEINMonitor:
     def __init__(self):
-        # HARDCODED CONFIGURATION
+        # Telegram Configuration (your credentials)
         self.bot_token = "8032399582:AAFzNpKyaxB3sr9gsvmwqGZE_v1m06ij4Rg"
         self.chat_id = "7985177810"
         self.bot = Bot(token=self.bot_token)
         
-        # Always check every 10 seconds
-        self.check_interval = 10
-        
-        # Alert when count goes above 30
+        # Monitoring settings
+        self.check_interval = 10  # Check every 10 seconds
         self.alert_threshold = 30
-        
-        # Store last count
         self.last_count = 0
         
-        logger.info("🚀 SHEIN Monitor Started")
-        logger.info(f"Checking every {self.check_interval} seconds")
-        logger.info(f"Alert threshold: {self.alert_threshold}")
+        # The direct URL that shows the count
+        self.target_url = "https://www.sheinindia.in/c/sverse-5939-37961#filterBy"
+        
+        # Create scraper to bypass Cloudflare
+        self.scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'windows',
+                'mobile': False
+            },
+            delay=10
+        )
+        
+        # User agent rotation
+        self.ua = UserAgent()
+        
+        # Proxy list (simplified - using first 5 proxies)
+        self.proxies = [
+            "http://purevpn0s12840722:vkgp6joz@px711001.pointtoserver.com:10780",
+            "http://purevpn0s12840722:vkgp6joz@px043006.pointtoserver.com:10780",
+            "http://ppurevpn0s12840722:vkgp6joz@px1160303.pointtoserver.com:10780",
+            "http://purevpn0s12840722:vkgp6joz@px1400403.pointtoserver.com:10780",
+            "http://purevpn0s12840722:vkgp6joz@px022409.pointtoserver.com:10780",
+        ]
+        self.current_proxy_index = 0
+        
+        logger.info("✅ SHEIN Monitor Initialized")
+        logger.info(f"🎯 Target URL: {self.target_url}")
+        logger.info(f"📊 Alert Threshold: {self.alert_threshold}")
+        logger.info(f"⏱️  Check Interval: {self.check_interval} seconds")
 
-    def setup_driver(self):
-        """Setup Chrome driver"""
-        options = Options()
-        
-        # Headless mode
-        options.add_argument('--headless')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--window-size=1920,1080')
-        
-        # Bypass detection
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
-        
-        # User agent
-        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        
-        # Use webdriver-manager to auto-install correct ChromeDriver
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
-        
-        # Execute CDP commands
-        driver.execute_cdp_cmd('Network.setUserAgentOverride', {
-            "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        })
-        
-        return driver
+    def get_next_proxy(self) -> dict:
+        """Get next proxy in rotation"""
+        proxy_url = self.proxies[self.current_proxy_index]
+        self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxies)
+        return {"http": proxy_url, "https": proxy_url}
 
-    def extract_men_count(self, driver):
-        """Extract men's product count"""
+    def fetch_page(self) -> Optional[str]:
+        """Fetch the page HTML with proxy rotation"""
+        proxy = self.get_next_proxy()
+        headers = {
+            'User-Agent': self.ua.random,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+        }
+        
         try:
-            # Wait for page to load
-            time.sleep(3)
+            logger.info(f"🌐 Fetching page using proxy: {proxy['http'].split('@')[1]}")
             
-            # Try to find men's count
-            men_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Men') or contains(text(), 'men')]")
-            
-            for element in men_elements:
-                text = element.text
-                if '(' in text and ')' in text:
-                    import re
-                    match = re.search(r'\((\d+)\)', text)
-                    if match:
-                        count = int(match.group(1))
-                        return count
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error extracting count: {e}")
-            return None
-
-    def send_telegram_alert(self, count):
-        """Send alert via Telegram"""
-        try:
-            message = f"🚨 SHEINVERSE STOCK ALERT 🚨\n\n"
-            message += f"Men's products: {count}\n"
-            message += f"Threshold: {self.alert_threshold}\n"
-            message += f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
-            
-            self.bot.send_message(
-                chat_id=self.chat_id,
-                text=message
+            response = self.scraper.get(
+                self.target_url,
+                headers=headers,
+                proxies=proxy,
+                timeout=30
             )
-            logger.info(f"✅ Telegram alert sent: {count} products")
-        except Exception as e:
-            logger.error(f"Failed to send alert: {e}")
-
-    def check_sheinverse(self):
-        """Main check function"""
-        driver = None
-        try:
-            driver = self.setup_driver()
             
-            # Open SHEIN
-            logger.info("🌐 Opening SHEIN...")
-            driver.get("https://shein.com")
-            time.sleep(5)
-            
-            # Look for SHEINVERSE
-            logger.info("🔍 Looking for SHEINVERSE...")
-            
-            # Try different selectors
-            sheinverse_selectors = [
-                "//*[contains(text(), 'SHEIN VERSE')]",
-                "//*[contains(text(), 'SHEINVERSE')]",
-                "//a[contains(@href, 'sheinverse')]",
-                "//div[contains(text(), 'SHEINVERSE')]"
-            ]
-            
-            found = False
-            for selector in sheinverse_selectors:
-                try:
-                    element = driver.find_element(By.XPATH, selector)
-                    element.click()
-                    logger.info("✅ Clicked SHEINVERSE")
-                    found = True
-                    time.sleep(5)
-                    break
-                except:
-                    continue
-            
-            if not found:
-                # Direct URL fallback
-                driver.get("https://shein.com/sheinverse")
-                logger.info("📝 Using direct URL")
-                time.sleep(5)
-            
-            # Look for filter button
-            logger.info("🔍 Opening filters...")
-            filter_selectors = [
-                "//button[contains(text(), 'Filter')]",
-                "//div[contains(text(), 'Filter')]",
-                "//span[contains(text(), 'Filter')]"
-            ]
-            
-            for selector in filter_selectors:
-                try:
-                    element = driver.find_element(By.XPATH, selector)
-                    element.click()
-                    logger.info("✅ Clicked filter button")
-                    time.sleep(3)
-                    break
-                except:
-                    continue
-            
-            # Extract count
-            count = self.extract_men_count(driver)
-            
-            if count is not None:
-                logger.info(f"📊 Current men's product count: {count}")
-                
-                # Check if we need to alert
-                if count > self.alert_threshold and count > self.last_count:
-                    self.send_telegram_alert(count)
-                
-                self.last_count = count
-                
-                # Save screenshot for debugging
-                try:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    driver.save_screenshot(f"check_{timestamp}.png")
-                except:
-                    pass
-                
-                return count
+            if response.status_code == 200:
+                logger.info("✅ Page fetched successfully")
+                return response.text
             else:
-                logger.warning("❌ Could not find men's product count")
+                logger.error(f"❌ HTTP {response.status_code}: Failed to fetch page")
                 return None
                 
         except Exception as e:
-            logger.error(f"❌ Check failed: {e}")
+            logger.error(f"❌ Request failed: {str(e)}")
             return None
-            
-        finally:
-            if driver:
-                driver.quit()
 
-    def run(self):
-        """Main loop"""
+    def extract_product_count(self, html: str) -> Optional[int]:
+        """
+        Extract product count from the HTML
+        This is the main logic - we look for the product count in different ways
+        """
+        if not html:
+            return None
+        
+        soup = BeautifulSoup(html, 'lxml')
+        
+        # STRATEGY 1: Look for filter counts (most common)
+        # SHEIN usually shows count in filter buttons like "Men (26)"
+        filter_items = soup.find_all(['a', 'span', 'div', 'li'], class_=lambda x: x and 'filter' in x.lower())
+        
+        for item in filter_items:
+            text = item.get_text(strip=True)
+            # Look for patterns like: Men (26), Men 26, Men:26
+            match = re.search(r'Men\s*[\(\:]?\s*(\d+)\s*[\)]?', text, re.IGNORECASE)
+            if match:
+                count = int(match.group(1))
+                logger.info(f"📌 Found count in filter: {count}")
+                return count
+        
+        # STRATEGY 2: Look for product count display
+        # Common selectors used by SHEIN
+        count_selectors = [
+            '.product-count',
+            '.goods-num',
+            '.total-products',
+            '.item-count',
+            '.j-expose__product-count',
+            '[data-count]',
+            '.search-count',
+            '.j-search-count',
+        ]
+        
+        for selector in count_selectors:
+            elements = soup.select(selector)
+            for element in elements:
+                text = element.get_text(strip=True)
+                # Extract numbers from text
+                numbers = re.findall(r'\d+', text)
+                if numbers:
+                    count = int(numbers[0])
+                    logger.info(f"📌 Found count via selector {selector}: {count}")
+                    return count
+        
+        # STRATEGY 3: Look in page title/header
+        title_elements = soup.find_all(['h1', 'h2', 'title', 'span'], string=lambda t: t and 'product' in t.lower())
+        for element in title_elements:
+            text = element.get_text()
+            numbers = re.findall(r'\d+', text)
+            if numbers:
+                count = int(numbers[0])
+                logger.info(f"📌 Found count in title: {count}")
+                return count
+        
+        # STRATEGY 4: Search entire HTML for common patterns
+        patterns = [
+            r'"totalCount"\s*:\s*(\d+)',
+            r'"productCount"\s*:\s*(\d+)',
+            r'"count"\s*:\s*(\d+)',
+            r'Showing\s+(\d+)\s+products',
+            r'(\d+)\s+products',
+            r'(\d+)\s+items',
+            r'Total\s*:\s*(\d+)',
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, html, re.IGNORECASE)
+            for match in matches:
+                if match.isdigit():
+                    count = int(match)
+                    logger.info(f"📌 Found count via regex {pattern}: {count}")
+                    return count
+        
+        # STRATEGY 5: Try to count product items on page
+        product_items = soup.select('.S-product-item, .j-product-item, .c-product, .product-card')
+        if product_items:
+            logger.info(f"📌 Found {len(product_items)} product items on page")
+            # Note: This might not be total count (due to pagination)
+            # But if other methods fail, this gives us something
+        
+        logger.warning("⚠️ Could not find product count in HTML")
+        
+        # Save HTML for debugging (only first time)
+        with open("debug_page.html", "w", encoding="utf-8") as f:
+            f.write(html)
+        logger.info("📁 Saved HTML to debug_page.html for inspection")
+        
+        return None
+
+    def send_telegram_alert(self, count: int):
+        """Send alert to Telegram"""
+        try:
+            message = f"""
+🚨 *SHEINVERSE STOCK ALERT* 🚨
+
+Men's product count has increased!
+
+📊 *Current Count:* {count}
+📈 *Previous Count:* {self.last_count}
+🎯 *Threshold:* {self.alert_threshold}
+⏰ *Time:* {datetime.now().strftime('%H:%M:%S')}
+
+_This is an automated alert from SHEIN Monitor_
+"""
+            self.bot.send_message(
+                chat_id=self.chat_id,
+                text=message,
+                parse_mode='Markdown'
+            )
+            logger.info(f"📤 Telegram alert sent for count: {count}")
+        except Exception as e:
+            logger.error(f"❌ Failed to send Telegram alert: {str(e)}")
+
+    def perform_check(self):
+        """Perform a single check cycle"""
+        logger.info("=" * 60)
+        logger.info("🔄 Starting check...")
+        
+        # Step 1: Fetch the page
+        html = self.fetch_page()
+        
+        if not html:
+            logger.warning("⚠️ Skipping check due to fetch failure")
+            return
+        
+        # Step 2: Extract product count
+        current_count = self.extract_product_count(html)
+        
+        if current_count is None:
+            logger.warning("⚠️ Could not extract product count")
+            return
+        
+        # Step 3: Log current status
+        logger.info(f"📊 Current Count: {current_count}")
+        logger.info(f"📈 Previous Count: {self.last_count}")
+        logger.info(f"🎯 Threshold: {self.alert_threshold}")
+        
+        # Step 4: Check if alert is needed
+        if current_count > self.alert_threshold and current_count > self.last_count:
+            logger.info("🚨 ALERT: Count exceeds threshold and increased!")
+            self.send_telegram_alert(current_count)
+        elif current_count > self.alert_threshold:
+            logger.info("ℹ️ Count exceeds threshold but hasn't increased")
+        else:
+            logger.info("✅ Count is below threshold")
+        
+        # Step 5: Update last count
+        self.last_count = current_count
+        
+        # Step 6: Save for debugging (optional)
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            with open(f"count_log.txt", "a") as f:
+                f.write(f"{timestamp},{current_count}\n")
+        except:
+            pass
+
+    def run_forever(self):
+        """Main monitoring loop"""
+        logger.info("""
+╔══════════════════════════════════════════════════╗
+║           SHEIN MONITOR STARTED                 ║
+║        Direct URL: sheinindia.in/sverse        ║
+║        Checking every 10 seconds                ║
+║        Press Ctrl+C to stop                     ║
+╚══════════════════════════════════════════════════╝
+        """)
+        
         check_number = 0
         
         while True:
             try:
                 check_number += 1
-                logger.info(f"\n{'='*50}")
-                logger.info(f"🔄 Check #{check_number}")
+                logger.info(f"\n📋 Check #{check_number}")
                 
-                result = self.check_sheinverse()
+                self.perform_check()
                 
-                if result is None:
-                    logger.warning("⚠️  Check returned no result")
-                
-                logger.info(f"⏰ Next check in {self.check_interval} seconds...")
+                logger.info(f"⏳ Waiting {self.check_interval} seconds...")
                 time.sleep(self.check_interval)
                 
             except KeyboardInterrupt:
-                logger.info("\n🛑 Stopping monitor...")
+                logger.info("\n🛑 Monitor stopped by user")
                 break
             except Exception as e:
-                logger.error(f"🔥 Unexpected error: {e}")
+                logger.error(f"🔥 Unexpected error: {str(e)}")
+                logger.info("🔄 Retrying in 10 seconds...")
                 time.sleep(self.check_interval)
 
 def main():
+    """Main entry point"""
     monitor = SHEINMonitor()
-    monitor.run()
+    monitor.run_forever()
 
 if __name__ == "__main__":
     main()
