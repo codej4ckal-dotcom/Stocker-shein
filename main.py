@@ -28,6 +28,11 @@ class SHEINMonitor:
         self.last_count = 0
         self.last_success_time = None
         
+        # Proxy settings
+        self.proxies = []
+        self.proxy_source_url = "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt"
+        self.proxy_check_timeout = 10
+        
         # The target URL
         self.target_url = "https://www.sheinindia.in/c/sverse-5939-37961"
         
@@ -63,11 +68,29 @@ class SHEINMonitor:
         ]
         
         logger.info("=" * 60)
-        logger.info("🚀 SHEIN MONITOR STARTED")
-        logger.info(f"📊 Target: {self.target_url}")
-        logger.info(f"🎯 Threshold: {self.alert_threshold}")
-        logger.info(f"⏱️ Check Interval: {self.check_interval}s")
+        logger.info("SHEIN MONITOR STARTED")
+        logger.info(f"Target: {self.target_url}")
+        logger.info(f"Threshold: {self.alert_threshold}")
+        logger.info(f"Check Interval: {self.check_interval}s")
+        logger.info(f"Check Interval: {self.check_interval}s")
         logger.info("=" * 60)
+        
+    def fetch_proxies(self):
+        """Fetch free proxies from GitHub"""
+        try:
+            logger.info("Fetching new proxies from GitHub...")
+            response = requests.get(self.proxy_source_url, timeout=10)
+            if response.status_code == 200:
+                proxy_list = response.text.strip().split('\n')
+                self.proxies = [p.strip() for p in proxy_list if p.strip()]
+                logger.info(f"Fetched {len(self.proxies)} proxies")
+                return True
+            else:
+                logger.warning(f"Failed to fetch proxies: Status {response.status_code}")
+                return False
+        except Exception as e:
+            logger.error(f"Error fetching proxies: {e}")
+            return False
     
     def extract_men_count_from_html(self, html: str) -> Optional[int]:
         """
@@ -122,44 +145,57 @@ class SHEINMonitor:
         return None
     
     def make_request(self):
-        """Make HTTP request with proper headers"""
-        headers = random.choice(self.headers_list)
+        """Make HTTP request with rotation and proxies"""
         
-        # Add cache-busting parameter
-        url = f"{self.target_url}?_={int(time.time() * 1000)}"
-        
-        try:
-            # Create a session to handle cookies
-            session = requests.Session()
+        # Ensure we have proxies
+        if not self.proxies:
+            self.fetch_proxies()
             
-            # First, get the homepage to set cookies
-            session.get("https://www.sheinindia.in", headers=headers, timeout=10)
-            time.sleep(1)
-            
-            # Now request the actual page
-            response = session.get(url, headers=headers, timeout=15)
-            
-            if response.status_code == 200:
-                logger.info(f"✅ Successfully fetched page (Status: {response.status_code})")
-                return response.text
-            else:
-                logger.warning(f"⚠️ Status {response.status_code}, trying alternative method...")
-                
-                # Try with different approach
-                headers['Referer'] = 'https://www.sheinindia.in/'
-                headers['Origin'] = 'https://www.sheinindia.in'
-                
-                response2 = requests.get(self.target_url, headers=headers, timeout=15)
-                
-                if response2.status_code == 200:
-                    return response2.text
-                else:
-                    logger.error(f"❌ Failed with status {response2.status_code}")
-                    return None
-                    
-        except Exception as e:
-            logger.error(f"❌ Request failed: {str(e)}")
+        if not self.proxies:
+            logger.warning("No proxies available, trying direct connection...")
+            # Fallback to direct connection if no proxies
+            try:
+                headers = random.choice(self.headers_list)
+                url = f"{self.target_url}?_={int(time.time() * 1000)}"
+                response = requests.get(url, headers=headers, timeout=15)
+                if response.status_code == 200:
+                   logger.info(f"Successfully fetched page (Direct) (Status: {response.status_code})")
+                   return response.text
+            except Exception as e:
+                logger.error(f"Direct connection failed: {e}")
             return None
+
+        # Try up to 5 different proxies
+        max_attempts = 5
+        
+        for i in range(max_attempts):
+            headers = random.choice(self.headers_list)
+            url = f"{self.target_url}?_={int(time.time() * 1000)}"
+            
+            # Pick a random proxy
+            proxy_ip = random.choice(self.proxies)
+            proxies = {
+                "http": f"http://{proxy_ip}",
+                "https": f"http://{proxy_ip}"
+            }
+            
+            try:
+                logger.info(f"Attempt {i+1}/{max_attempts} using proxy: {proxy_ip}")
+                response = requests.get(url, headers=headers, proxies=proxies, timeout=15)
+                
+                if response.status_code == 200:
+                    logger.info(f"Successfully fetched page (Status: {response.status_code})")
+                    return response.text
+                elif response.status_code in [403, 407, 429]:
+                    logger.warning(f"Proxy {proxy_ip} blocked (Status {response.status_code}), trying next...")
+                else:
+                    logger.warning(f"Status {response.status_code} with proxy {proxy_ip}")
+                    
+            except Exception as e:
+                logger.warning(f"Proxy {proxy_ip} failed: {str(e)}")
+                
+        logger.error("All proxy attempts failed")
+        return None
     
     def send_telegram_alert(self, count: int):
         """Send alert to Telegram"""
@@ -167,16 +203,16 @@ class SHEINMonitor:
             current_time = datetime.now().strftime("%H:%M:%S")
             
             message = f"""
-🚨 *SHEINVERSE STOCK ALERT* 🚨
+SHEINVERSE STOCK ALERT
 
-*Men's product count has increased!*
+Men's product count has increased!
 
-📊 *New Count:* {count}
-📈 *Previous Count:* {self.last_count}
-🎯 *Threshold:* {self.alert_threshold}
-⏰ *Time:* {current_time}
+New Count: {count}
+Previous Count: {self.last_count}
+Threshold: {self.alert_threshold}
+Time: {current_time}
 
-_This is an automated alert from your SHEIN Monitor_
+This is an automated alert from your SHEIN Monitor
 """
             
             self.bot.send_message(
@@ -186,7 +222,7 @@ _This is an automated alert from your SHEIN Monitor_
                 disable_notification=False
             )
             
-            logger.info(f"📤 Telegram alert sent for count: {count}")
+            logger.info(f"Telegram alert sent for count: {count}")
             
         except Exception as e:
             logger.error(f"Failed to send Telegram alert: {e}")
@@ -194,47 +230,47 @@ _This is an automated alert from your SHEIN Monitor_
     def perform_check(self, check_number: int):
         """Perform a single check"""
         logger.info(f"\n{'='*60}")
-        logger.info(f"🔄 CHECK #{check_number}")
-        logger.info(f"⏰ {datetime.now().strftime('%H:%M:%S')}")
+        logger.info(f"CHECK #{check_number}")
+        logger.info(f"{datetime.now().strftime('%H:%M:%S')}")
         
         # Step 1: Fetch the page
-        logger.info("🌐 Fetching page...")
+        logger.info("Fetching page...")
         html = self.make_request()
         
         if not html:
-            logger.warning("⚠️ Failed to fetch page, waiting for next check...")
+            logger.warning("Failed to fetch page, waiting for next check...")
             return
         
         # Step 2: Extract count
-        logger.info("🔍 Extracting men's product count...")
+        logger.info("Extracting men's product count...")
         current_count = self.extract_men_count_from_html(html)
         
         if current_count is None:
-            logger.warning("⚠️ Could not find men's product count")
+            logger.warning("Could not find men's product count")
             
             # Save HTML for debugging (first 3 failures only)
             if check_number <= 3:
                 try:
                     with open(f"debug_{check_number}.html", "w", encoding="utf-8") as f:
                         f.write(html[:50000])  # Save first 50k chars
-                    logger.info(f"💾 Saved HTML snippet to debug_{check_number}.html")
+                    logger.info(f"Saved HTML snippet to debug_{check_number}.html")
                 except:
                     pass
             return
         
         # Step 3: Log the result
-        logger.info(f"📊 Current Men's Count: {current_count}")
-        logger.info(f"📈 Previous Count: {self.last_count}")
-        logger.info(f"🎯 Alert Threshold: {self.alert_threshold}")
+        logger.info(f"Current Men's Count: {current_count}")
+        logger.info(f"Previous Count: {self.last_count}")
+        logger.info(f"Alert Threshold: {self.alert_threshold}")
         
         # Step 4: Check if we need to send alert
         if current_count > self.alert_threshold and current_count > self.last_count:
-            logger.info("🚨 ALERT TRIGGERED: Count increased above threshold!")
+            logger.info("ALERT TRIGGERED: Count increased above threshold!")
             self.send_telegram_alert(current_count)
         elif current_count > self.alert_threshold:
-            logger.info("ℹ️ Count is above threshold but hasn't increased")
+            logger.info("Count is above threshold but hasn't increased")
         else:
-            logger.info("✅ Count is below threshold")
+            logger.info("Count is below threshold")
         
         # Step 5: Update last count
         self.last_count = current_count
@@ -248,7 +284,7 @@ _This is an automated alert from your SHEIN Monitor_
         except:
             pass
         
-        logger.info(f"✅ Check #{check_number} completed successfully")
+        logger.info(f"Check #{check_number} completed successfully")
     
     def run(self):
         """Main monitoring loop"""
@@ -256,7 +292,7 @@ _This is an automated alert from your SHEIN Monitor_
         consecutive_failures = 0
         
         logger.info("\n" + "="*60)
-        logger.info("🏁 MONITORING STARTED - Press Ctrl+C to stop")
+        logger.info("MONITORING STARTED - Press Ctrl+C to stop")
         logger.info("="*60)
         
         while True:
@@ -268,21 +304,21 @@ _This is an automated alert from your SHEIN Monitor_
                 # Reset failure counter on success
                 consecutive_failures = 0
                 
-                logger.info(f"⏳ Waiting {self.check_interval} seconds until next check...\n")
+                logger.info(f"Waiting {self.check_interval} seconds until next check...\n")
                 time.sleep(self.check_interval)
                 
             except KeyboardInterrupt:
-                logger.info("\n🛑 Monitoring stopped by user")
+                logger.info("\nMonitoring stopped by user")
                 break
                 
             except Exception as e:
                 consecutive_failures += 1
-                logger.error(f"🔥 Error in check #{check_number}: {str(e)}")
+                logger.error(f"Error in check #{check_number}: {str(e)}")
                 
                 # If we have consecutive failures, wait longer
                 if consecutive_failures >= 3:
                     wait_time = 30
-                    logger.warning(f"⚠️ {consecutive_failures} consecutive failures, waiting {wait_time} seconds...")
+                    logger.warning(f"{consecutive_failures} consecutive failures, waiting {wait_time} seconds...")
                     time.sleep(wait_time)
                 else:
                     time.sleep(self.check_interval)
