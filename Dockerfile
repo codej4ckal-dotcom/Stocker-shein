@@ -23,9 +23,8 @@ COPY shein_monitor.py .
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)"
+# Expose port for Render.com health checks
+EXPOSE 8080
 
 # Run the monitor
 CMD ["python", "shein_monitor.py"]
