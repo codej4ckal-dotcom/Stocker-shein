@@ -6,6 +6,9 @@ import json
 from datetime import datetime
 from typing import Optional
 import urllib3
+import os
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 
 import requests
 from telegram import Bot
@@ -22,6 +25,28 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Simple HTTP server for health checks
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health' or self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(b'OK - SHEIN Monitor is running')
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        # Suppress default HTTP logs
+        pass
+
+def start_health_server(port=8080):
+    """Start a simple HTTP server for health checks"""
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    logger.info(f"Health check server started on port {port}")
+    server.serve_forever()
 
 class SHEINFilterMonitor:
     def __init__(self):
@@ -371,7 +396,7 @@ _You will receive alerts when the men's product count changes above the threshol
         
         logger.info(f"✅ Check #{check_number} completed successfully")
     
-    def run(self):
+    def run_monitoring(self):
         """Main monitoring loop"""
         check_number = 0
         consecutive_failures = 0
@@ -419,9 +444,14 @@ _You will receive alerts when the men's product count changes above the threshol
 def main():
     """Entry point"""
     try:
+        # Start health check server in a separate thread for Render.com
+        port = int(os.getenv('PORT', '8080'))
+        health_thread = threading.Thread(target=start_health_server, args=(port,), daemon=True)
+        health_thread.start()
+        
         # Create and run monitor
         monitor = SHEINFilterMonitor()
-        monitor.run()
+        monitor.run_monitoring()
     except Exception as e:
         logger.error(f"❌ Failed to start monitor: {e}")
         raise
