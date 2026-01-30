@@ -21,7 +21,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code
 COPY shein_monitor.py .
-COPY .env .  # Optional: for environment variables
 
 # Create a non-root user to run the app
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
