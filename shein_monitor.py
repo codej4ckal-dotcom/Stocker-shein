@@ -1,57 +1,58 @@
 import time
 import logging
-import json
 import random
 import re
+import json
 from datetime import datetime
 from typing import Optional
+import urllib3
 
 import requests
 from telegram import Bot
 
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
-class SHEINMonitor:
+class SHEINFilterMonitor:
     def __init__(self):
-        # Telegram Configuration
+        # HARDCODED CONFIGURATION - NO ENV VARIABLES
         self.bot_token = "8032399582:AAFzNpKyaxB3sr9gsvmwqGZE_v1m06ij4Rg"
         self.chat_id = "7985177810"
+        
         self.bot = Bot(token=self.bot_token)
         
         # Monitoring settings
         self.check_interval = 10  # Check every 10 seconds
-        self.alert_threshold = 30
+        self.alert_threshold = 30  # Alert when count is above 30
         self.last_count = 0
         self.last_success_time = None
         
-        # Use the provided working proxies
-        self.proxies = [
-            "http://KUW13c1nFxecEKhE:UHaoOIMWnpwHOU2a@geo.g-w.info:10080",
-            "http://huCj0gKecBHifYVC:8nrCaEUR8t2C5Llk@geo.g-w.info:10080",
-            "http://mMQoZnGSy8kIrFul:v43gVbFPd7lfBa5M@geo.g-w.info:10080",
-            "http://JbaLqkX6Rdq2MBrn:anXnVfjfJIs7d05j@geo.g-w.info:10080",
-            "http://FEasPUIMSeDrZtjB:aFnjp2YKIZk7gKPJ@geo.g-w.info:10080",
-            "http://2xt-customer-xi4tcsT0Vtt-proxy-anuz:17q5yrumu1d@proxy.2extract.net:5555",
-            "http://ebQWGfx9n1oQlhQK:WAaWggoEKe1G576O@geo.g-w.info:10080",
-            "http://P5oHRYHqX3w8yQhq:yoOlnnpQ3dDcIlLX@geo.g-w.info:10080"
+        # The target URL with filterBy to open filter panel
+        self.target_url = "https://www.sheinindia.in/c/sverse-5939-37961#filterBy"
+        
+        # Cache busting parameters
+        self.cache_busting_params = [
+            f"?_={int(time.time() * 1000)}",
+            f"?timestamp={int(time.time() * 1000)}",
+            f"?v={int(time.time())}",
         ]
         
-        logger.info(f"Loaded {len(self.proxies)} working proxies")
-        
-        # The target URL - using filterBy to show filter panel
-        self.target_url = "https://www.sheinindia.in/c/sverse-5939-37961"
-        
-        # Enhanced headers with better browser emulation
+        # Enhanced browser headers specifically for SHEIN India
         self.headers_list = [
             {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Language': 'en-US,en;q=0.9,hi;q=0.8',
                 'Accept-Encoding': 'gzip, deflate, br',
                 'DNT': '1',
                 'Connection': 'keep-alive',
@@ -62,12 +63,14 @@ class SHEINMonitor:
                 'Sec-Fetch-User': '?1',
                 'Cache-Control': 'max-age=0',
                 'Referer': 'https://www.sheinindia.in/',
-                'Accept-Charset': 'utf-8',
+                'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
             },
             {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Language': 'en-US,en;q=0.5,hi;q=0.3',
                 'Accept-Encoding': 'gzip, deflate, br',
                 'DNT': '1',
                 'Connection': 'keep-alive',
@@ -88,206 +91,188 @@ class SHEINMonitor:
                 'Upgrade-Insecure-Requests': '1',
                 'Cache-Control': 'max-age=0',
                 'Referer': 'https://www.sheinindia.in/',
+                'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"macOS"',
             }
         ]
         
-        # Add cache-busting parameters to avoid cached responses
-        self.cache_busting_params = [
-            f"?_={int(time.time() * 1000)}",
-            f"?timestamp={int(time.time() * 1000)}",
-            f"?nocache={int(time.time() * 1000)}",
-            f"?v={int(time.time() * 1000)}",
-        ]
-        
         logger.info("=" * 60)
-        logger.info("SHEIN MONITOR STARTED")
-        logger.info(f"Target: {self.target_url}")
-        logger.info(f"Threshold: {self.alert_threshold}")
-        logger.info(f"Check Interval: {self.check_interval}s")
-        logger.info(f"Loaded {len(self.proxies)} proxies")
+        logger.info("🚀 SHEIN FILTER MONITOR STARTED")
+        logger.info(f"📌 Target URL: {self.target_url}")
+        logger.info(f"🎯 Alert Threshold: {self.alert_threshold}")
+        logger.info(f"⏱️ Check Interval: {self.check_interval}s")
+        logger.info(f"🤖 Telegram Bot: Active")
         logger.info("=" * 60)
     
     def extract_men_count_from_html(self, html: str) -> Optional[int]:
         """
-        Extract the men's count from HTML
-        Based on the screenshot: "Men (32)"
+        Extract men's product count from HTML filter panel
+        Based on the pattern: "Men (32)" in the filter section
         """
         try:
-            # Clean the HTML - remove newlines and extra spaces for better regex matching
-            cleaned_html = html.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+            # Method 1: Direct regex for "Men (XX)" - This should be the most reliable
+            direct_patterns = [
+                r'>\s*Men\s*\(\s*(\d+)\s*\)\s*<',
+                r'Men\s*\(\s*(\d+)\s*\)',
+                r'\bMen\b[^0-9]*(\d+)[^0-9]*\)',
+            ]
             
-            # Method 1: Direct regex for "Men (32)" - exact match
-            # This is the primary method based on your screenshot
-            pattern = r'Men\s*\(\s*(\d+)\s*\)'
-            matches = re.findall(pattern, cleaned_html)
+            for pattern in direct_patterns:
+                matches = re.findall(pattern, html, re.IGNORECASE)
+                if matches:
+                    # Take the first match
+                    count = int(matches[0])
+                    logger.info(f"✅ Found men's count via direct pattern: {count}")
+                    return count
             
-            if matches:
-                # Take the first match (should be the men's count)
-                count = int(matches[0])
-                logger.info(f"✓ Found men's count: {count}")
-                return count
-            
-            # Method 2: Look for gender filter section
-            # Find the Gender section and extract men's count from it
-            gender_pattern = r'Gender[^>]*>.*?Men\s*\(\s*(\d+)\s*\)'
-            matches = re.findall(gender_pattern, cleaned_html, re.IGNORECASE | re.DOTALL)
-            
-            if matches:
-                count = int(matches[0])
-                logger.info(f"✓ Found in Gender section: {count}")
-                return count
-            
-            # Method 3: Look for filter item with men count
-            # Search for list items or spans containing Men with count
-            filter_patterns = [
-                r'<[^>]*data-filter-name=["\']?men["\'][^>]*>.*?\((\d+)\)',
+            # Method 2: Look for Gender filter section
+            gender_patterns = [
+                r'Gender[^>]*>.*?Men\s*\(\s*(\d+)\s*\)',
+                r'<[^>]*data-filter-type=["\']?gender["\'][^>]*>.*?Men\s*\(\s*(\d+)\s*\)',
                 r'<[^>]*class=[^>]*filter-item[^>]*>.*?Men.*?\((\d+)\)',
-                r'<[^>]*>Men.*?\((\d+)\)<',
-                r'Men["\'\s].*?(\d+).*?\)',
             ]
             
-            for pattern in filter_patterns:
-                matches = re.findall(pattern, cleaned_html, re.IGNORECASE)
+            for pattern in gender_patterns:
+                matches = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
                 if matches:
                     count = int(matches[0])
-                    logger.info(f"✓ Found via filter pattern: {count}")
+                    logger.info(f"✅ Found men's count in gender filter: {count}")
                     return count
             
-            # Method 4: Try to find the filter count in JSON data
-            # Look for JSON structures that might contain filter counts
-            json_patterns = [
-                r'"filterCount"\s*:\s*\{[^}]*"men"\s*:\s*(\d+)',
-                r'"men"\s*:\s*(\d+)[^}]*"filterCount"',
-                r'"gender"[^}]*"men"\s*:\s*(\d+)',
-                r'"Men"\s*:\s*(\d+)',
+            # Method 3: Look for filter list items
+            filter_item_patterns = [
+                r'<li[^>]*>.*?Men.*?\((\d+)\).*?</li>',
+                r'<div[^>]*>.*?Men.*?\((\d+)\).*?</div>',
+                r'<span[^>]*>.*?Men.*?\((\d+)\).*?</span>',
             ]
             
-            for pattern in json_patterns:
-                matches = re.findall(pattern, cleaned_html, re.IGNORECASE)
+            for pattern in filter_item_patterns:
+                matches = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
                 if matches:
                     count = int(matches[0])
-                    logger.info(f"✓ Found in JSON data: {count}")
+                    logger.info(f"✅ Found men's count in filter item: {count}")
                     return count
             
-            # Debug: Save HTML snippet for analysis
-            logger.warning("Could not extract men's count with primary methods")
+            # Method 4: Try to find all filter counts and identify men's
+            all_filters_pattern = r'([A-Za-z]+)\s*\(\s*(\d+)\s*\)'
+            all_matches = re.findall(all_filters_pattern, html)
             
-            # Try to find any mention of Men with numbers
-            debug_pattern = r'Men[^0-9]*(\d+)'
-            debug_matches = re.findall(debug_pattern, cleaned_html, re.IGNORECASE)
-            if debug_matches:
-                logger.warning(f"Debug - Found potential counts near 'Men': {debug_matches}")
+            if all_matches:
+                logger.info(f"🔍 Found all filter counts: {all_matches}")
+                for filter_name, filter_count in all_matches:
+                    if filter_name.lower() == 'men':
+                        count = int(filter_count)
+                        logger.info(f"✅ Identified men's count from all filters: {count}")
+                        return count
             
-            # Also look for Women count to verify we're in the right section
-            women_pattern = r'Women\s*\(\s*(\d+)\s*\)'
-            women_matches = re.findall(women_pattern, cleaned_html, re.IGNORECASE)
-            if women_matches:
-                logger.warning(f"Found Women count: {women_matches[0]}")
+            # Debug: Try to find any numeric patterns near "Men"
+            men_pos = html.lower().find('men')
+            if men_pos != -1:
+                start = max(0, men_pos - 200)
+                end = min(len(html), men_pos + 200)
+                context = html[start:end]
+                logger.debug(f"🔍 Context around 'Men': {context}")
+                
+                # Try to extract any number near "Men"
+                near_pattern = r'Men[^0-9]*(\d+)'
+                near_matches = re.findall(near_pattern, context, re.IGNORECASE)
+                if near_matches:
+                    count = int(near_matches[0])
+                    logger.info(f"✅ Found number near 'Men': {count}")
+                    return count
             
+            logger.warning("⚠️ Could not extract men's count. HTML structure might have changed.")
             return None
             
         except Exception as e:
-            logger.error(f"Error extracting count: {e}")
+            logger.error(f"❌ Error extracting count: {e}")
             return None
     
     def make_request(self):
-        """Make HTTP request with proxy rotation and headers"""
-        
-        # Rotate through different cache-busting parameters
+        """Make HTTP request to fetch the filter page"""
+        # Remove fragment for the actual request (server doesn't see #filterBy)
+        base_url = self.target_url.split('#')[0]
         cache_param = random.choice(self.cache_busting_params)
+        headers = random.choice(self.headers_list)
         
-        # Try up to 3 different proxies
-        max_attempts = 3
+        url = f"{base_url}{cache_param}"
         
-        for i in range(max_attempts):
-            # Randomly select headers and proxy
-            headers = random.choice(self.headers_list)
-            proxy = random.choice(self.proxies)
-            
-            # Build URL with cache busting
-            url = f"{self.target_url}{cache_param}"
-            
-            # Setup proxies dict
-            proxies = {
-                "http": proxy,
-                "https": proxy.replace('http://', 'https://') if proxy.startswith('http://') else proxy
-            }
-            
-            try:
-                logger.info(f"Attempt {i+1}/{max_attempts} using proxy: {proxy[:50]}...")
-                
-                # Add a small random delay between requests
-                time.sleep(random.uniform(0.5, 1.5))
-                
-                response = requests.get(
-                    url, 
-                    headers=headers, 
-                    proxies=proxies, 
-                    timeout=15,
-                    verify=False  # Sometimes needed with proxies
-                )
-                
-                if response.status_code == 200:
-                    # Check if the response contains the expected content
-                    if 'Men' in response.text or 'Women' in response.text or 'Gender' in response.text:
-                        logger.info(f"✓ Successfully fetched page (Status: {response.status_code})")
-                        return response.text
-                    else:
-                        logger.warning("Page fetched but doesn't contain expected filter content")
-                elif response.status_code in [403, 429, 503]:
-                    logger.warning(f"Proxy blocked/rate limited (Status {response.status_code})")
-                else:
-                    logger.warning(f"Status {response.status_code}")
-                    
-            except requests.exceptions.ConnectTimeout:
-                logger.warning(f"Proxy timeout: {proxy[:50]}...")
-            except requests.exceptions.ProxyError:
-                logger.warning(f"Proxy error: {proxy[:50]}...")
-            except Exception as e:
-                logger.warning(f"Request failed: {str(e)[:100]}")
+        logger.info(f"🌐 Fetching URL: {url[:80]}...")
         
-        # Fallback: Try direct connection as last resort
-        logger.warning("All proxy attempts failed, trying direct connection...")
         try:
-            headers = random.choice(self.headers_list)
-            url = f"{self.target_url}{cache_param}"
-            response = requests.get(url, headers=headers, timeout=15)
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=15,
+                verify=False,
+                allow_redirects=True
+            )
+            
             if response.status_code == 200:
-                logger.info(f"✓ Direct connection successful")
-                return response.text
+                logger.info(f"✅ Successfully fetched page (Status: {response.status_code})")
+                
+                # Check if we got meaningful content
+                content_lower = response.text.lower()
+                if any(keyword in content_lower for keyword in ['men', 'women', 'gender', 'filter']):
+                    return response.text
+                else:
+                    logger.warning("⚠️ Page fetched but doesn't contain filter keywords")
+                    return None
+            else:
+                logger.warning(f"⚠️ Request failed with status: {response.status_code}")
+                return None
+                
+        except requests.exceptions.Timeout:
+            logger.error("⏰ Request timeout")
+            return None
+        except requests.exceptions.ConnectionError:
+            logger.error("🔌 Connection error")
+            return None
         except Exception as e:
-            logger.error(f"Direct connection also failed: {e}")
-        
-        return None
+            logger.error(f"❌ Request failed: {e}")
+            return None
     
-    def send_telegram_alert(self, count: int, change_type: str = "changed"):
+    def send_telegram_alert(self, count: int):
         """Send alert to Telegram"""
         try:
             current_time = datetime.now().strftime("%H:%M:%S")
-            date_str = datetime.now().strftime("%B %d")
+            current_date = datetime.now().strftime("%B %d, %Y")
             
             # Determine change direction
             if self.last_count > 0:
                 if count > self.last_count:
-                    change_direction = "increased"
+                    change_direction = "📈 INCREASED"
+                    change_emoji = "🔼"
                 elif count < self.last_count:
-                    change_direction = "decreased"
+                    change_direction = "📉 DECREASED"
+                    change_emoji = "🔽"
                 else:
-                    change_direction = "unchanged"
+                    change_direction = "CHANGED"
+                    change_emoji = "🔄"
             else:
-                change_direction = "detected"
+                change_direction = "DETECTED"
+                change_emoji = "🎯"
+            
+            # Calculate change amount
+            change_amount = abs(count - self.last_count) if self.last_count > 0 else 0
             
             message = f"""
-**SHEINVERSE STOCK ALERT - {date_str}**
+🚨 **SHEINVERSE STOCK ALERT** 🚨
+{change_emoji} *Men's Product Count {change_direction}*
 
-Men's product count has {change_direction}!
+📊 **Details:**
+- New Count: `{count}`
+- Previous Count: `{self.last_count}`
+- Change: `{f'+{change_amount}' if count > self.last_count else f'-{change_amount}' if self.last_count > 0 else 'N/A'}`
+- Threshold: `{self.alert_threshold}`
+- Time: `{current_time}`
+- Date: `{current_date}`
 
-- New Count: `{count}`  
-- Previous Count: `{self.last_count}`  
-- Threshold: `{self.alert_threshold}`  
-- Time: `{current_time}`  
+🔗 **Product Page:**
+{self.target_url}
 
-_This is an automated alert from your SHEIN Monitor_
+_This is an automated alert from your SHEIN Filter Monitor_
 """
             
             self.bot.send_message(
@@ -297,76 +282,94 @@ _This is an automated alert from your SHEIN Monitor_
                 disable_notification=False
             )
             
-            logger.info(f"✓ Telegram alert sent: {count} (was: {self.last_count})")
+            logger.info(f"✅ Telegram alert sent: {count} (was: {self.last_count})")
             
         except Exception as e:
-            logger.error(f"Failed to send Telegram alert: {e}")
+            logger.error(f"❌ Failed to send Telegram alert: {e}")
+    
+    def send_startup_notification(self):
+        """Send startup notification to Telegram"""
+        try:
+            message = f"""
+🚀 **SHEIN FILTER MONITOR STARTED** 🚀
+
+✅ **Monitor is now active**
+📊 **Monitoring:** Men's product count in SHEINVERSE
+🎯 **Alert Threshold:** {self.alert_threshold}+ products
+⏱️ **Check Interval:** {self.check_interval} seconds
+🔗 **Target URL:** {self.target_url}
+
+_You will receive alerts when the men's product count changes above the threshold._
+
+📅 Started: {datetime.now().strftime('%B %d, %Y %H:%M:%S')}
+"""
+            
+            self.bot.send_message(
+                chat_id=self.chat_id,
+                text=message,
+                parse_mode='Markdown',
+                disable_notification=True
+            )
+            
+            logger.info("✅ Startup notification sent")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to send startup notification: {e}")
     
     def perform_check(self, check_number: int):
-        """Perform a single check"""
+        """Perform a single monitoring check"""
         logger.info(f"\n{'='*60}")
-        logger.info(f"CHECK #{check_number}")
-        logger.info(f"Time: {datetime.now().strftime('%H:%M:%S')}")
+        logger.info(f"🔍 CHECK #{check_number}")
+        logger.info(f"⏰ Time: {datetime.now().strftime('%H:%M:%S')}")
         
         # Step 1: Fetch the page
         html = self.make_request()
         
         if not html:
-            logger.warning("✗ Failed to fetch page")
+            logger.warning("❌ Failed to fetch page, waiting for next check...")
             return
         
-        # Step 2: Extract count
+        # Step 2: Extract men's product count
         current_count = self.extract_men_count_from_html(html)
         
         if current_count is None:
-            logger.warning("✗ Could not find men's product count")
-            
-            # Save HTML for debugging (first 5 failures)
-            if check_number <= 5:
-                try:
-                    filename = f"debug_check_{check_number}_{int(time.time())}.html"
-                    with open(filename, "w", encoding="utf-8") as f:
-                        f.write(html[:20000])  # Save first 20k chars
-                    logger.info(f"Saved debug HTML to {filename}")
-                except:
-                    pass
+            logger.warning("❌ Could not extract men's product count")
             return
         
         # Step 3: Log the result
-        logger.info(f"Current Men's Count: {current_count}")
-        logger.info(f"Previous Count: {self.last_count}")
-        logger.info(f"Alert Threshold: {self.alert_threshold}")
+        logger.info(f"📊 Current Men's Count: {current_count}")
+        logger.info(f"📊 Previous Count: {self.last_count}")
+        logger.info(f"🎯 Alert Threshold: {self.alert_threshold}")
         
         # Step 4: Check if we need to send alert
-        # Send alert if:
-        # 1. Count is above threshold AND
-        # 2. Count is different from previous count
+        # Conditions for alert:
+        # 1. Count is above threshold AND count has changed
+        # 2. OR count was above threshold and now dropped below (also send alert)
+        
+        should_alert = False
+        alert_reason = ""
+        
         if current_count > self.alert_threshold and current_count != self.last_count:
-            logger.info(f"✓ ALERT TRIGGERED: Count {change_direction} from {self.last_count} to {current_count}")
+            should_alert = True
+            alert_reason = f"Count changed from {self.last_count} to {current_count} (above threshold)"
+        elif self.last_count > self.alert_threshold and current_count <= self.alert_threshold:
+            should_alert = True
+            alert_reason = f"Count dropped below threshold from {self.last_count} to {current_count}"
+        
+        if should_alert:
+            logger.info(f"🚨 ALERT TRIGGERED: {alert_reason}")
             self.send_telegram_alert(current_count)
-        elif current_count > self.alert_threshold:
-            logger.info("Count is above threshold but unchanged")
-        elif current_count <= self.alert_threshold:
-            logger.info(f"Count is below/at threshold: {current_count}")
-            
-            # Also send alert if it was previously above threshold and now dropped below
-            if self.last_count > self.alert_threshold and current_count <= self.alert_threshold:
-                logger.info(f"✓ ALERT: Count dropped below threshold from {self.last_count} to {current_count}")
-                self.send_telegram_alert(current_count)
+        else:
+            if current_count > self.alert_threshold:
+                logger.info("✅ Count is above threshold but unchanged")
+            else:
+                logger.info(f"📉 Count is at/below threshold: {current_count}")
         
         # Step 5: Update last count
         self.last_count = current_count
         self.last_success_time = datetime.now()
         
-        # Step 6: Log to file for tracking
-        try:
-            with open("shein_monitor_log.csv", "a", encoding="utf-8") as f:
-                timestamp = datetime.now().isoformat()
-                f.write(f"{timestamp},{current_count},{self.last_count}\n")
-        except Exception as e:
-            logger.warning(f"Could not write to log file: {e}")
-        
-        logger.info(f"✓ Check #{check_number} completed")
+        logger.info(f"✅ Check #{check_number} completed successfully")
     
     def run(self):
         """Main monitoring loop"""
@@ -374,66 +377,54 @@ _This is an automated alert from your SHEIN Monitor_
         consecutive_failures = 0
         
         logger.info("\n" + "="*60)
-        logger.info("MONITORING STARTED - Press Ctrl+C to stop")
+        logger.info("🚀 MONITORING STARTED - Press Ctrl+C to stop")
         logger.info("="*60)
         
         # Send startup notification
-        try:
-            self.bot.send_message(
-                chat_id=self.chat_id,
-                text="🚀 SHEIN Monitor started successfully!\nMonitoring for men's product count changes above 30.",
-                parse_mode='Markdown'
-            )
-        except:
-            pass
+        self.send_startup_notification()
         
-        while True:
-            try:
-                check_number += 1
-                
-                self.perform_check(check_number)
-                
-                # Reset failure counter on success
-                consecutive_failures = 0
-                
-                # Randomize wait time slightly to avoid patterns
-                wait_time = self.check_interval + random.uniform(-2, 2)
-                logger.info(f"Waiting {wait_time:.1f} seconds until next check...\n")
-                time.sleep(wait_time)
-                
-            except KeyboardInterrupt:
-                logger.info("\nMonitoring stopped by user")
-                # Send shutdown notification
+        try:
+            while True:
                 try:
-                    self.bot.send_message(
-                        chat_id=self.chat_id,
-                        text="🛑 SHEIN Monitor stopped.",
-                        parse_mode='Markdown'
-                    )
-                except:
-                    pass
-                break
-                
-            except Exception as e:
-                consecutive_failures += 1
-                logger.error(f"Error in check #{check_number}: {str(e)}")
-                
-                # If we have consecutive failures, wait longer
-                if consecutive_failures >= 3:
-                    wait_time = 60
-                    logger.warning(f"{consecutive_failures} consecutive failures, waiting {wait_time} seconds...")
+                    check_number += 1
+                    
+                    self.perform_check(check_number)
+                    
+                    # Reset failure counter on success
+                    consecutive_failures = 0
+                    
+                    # Wait for next check with slight randomization
+                    wait_time = self.check_interval + random.uniform(-1, 1)
+                    logger.info(f"⏳ Waiting {wait_time:.1f} seconds until next check...\n")
                     time.sleep(wait_time)
-                else:
-                    time.sleep(self.check_interval)
+                    
+                except Exception as e:
+                    consecutive_failures += 1
+                    logger.error(f"❌ Error in check #{check_number}: {str(e)}")
+                    
+                    # If we have consecutive failures, wait longer
+                    if consecutive_failures >= 3:
+                        wait_time = 30
+                        logger.warning(f"⚠️ {consecutive_failures} consecutive failures, waiting {wait_time} seconds...")
+                        time.sleep(wait_time)
+                    else:
+                        time.sleep(self.check_interval)
+                        
+        except KeyboardInterrupt:
+            logger.info("\n🛑 Monitoring stopped by user")
+        except Exception as e:
+            logger.error(f"❌ Fatal error in main loop: {e}")
+            raise
 
 def main():
     """Entry point"""
-    monitor = SHEINMonitor()
-    monitor.run()
+    try:
+        # Create and run monitor
+        monitor = SHEINFilterMonitor()
+        monitor.run()
+    except Exception as e:
+        logger.error(f"❌ Failed to start monitor: {e}")
+        raise
 
 if __name__ == "__main__":
-    # Disable SSL warnings for proxy connections
-    import urllib3
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    
     main()
